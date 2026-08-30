@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Query-to-Quote Agent</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>🧳 Query-to-Quote Agent</h1>
+        <p class="subtitle">Paste a travel inquiry and watch the agent process it step-by-step.</p>
+
+        <form id="inquiry-form">
+            <textarea
+                id="inquiry"
+                name="inquiry"
+                rows="5"
+                placeholder="e.g. We want a Bali trip for 4 people, 5 nights from Dec 20 to Dec 25. Budget around 1.5 lakhs total. Need flights from Bangalore, a nice resort in Ubud, and some activities."
+            ></textarea>
+            <button type="submit" id="submit-btn">⚡ Process Inquiry</button>
+        </form>
+
+        <div id="results" class="hidden">
+            <h2>Agent Pipeline</h2>
+            <div id="timeline"></div>
+        </div>
+    </div>
+
+    <script>
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function renderBadge(quality) {
+            const cls = { hot: 'badge-hot', warm: 'badge-warm', vague: 'badge-vague' }[quality] || '';
+            return `<span class="badge ${cls}">${escapeHtml(quality)}</span>`;
+        }
+
+        function renderRates(rates) {
+            if (!rates || rates.length === 0) return '<em>No matching rates found.</em>';
+            return rates.map(r => `<div class="rate-item">📄 ${escapeHtml(r)}</div>`).join('');
+        }
+
+        function renderStep(num, title, content, active) {
+            return `
+                <div class="step ${active ? 'step-active' : ''}">
+                    <div class="step-num">${num}</div>
+                    <div class="step-title">${title}</div>
+                    <div class="step-content">${content}</div>
+                </div>
+            `;
+        }
+
+        function formatIntent(intent) {
+            if (!intent) return '<em>Extraction failed</em>';
+            const fields = [
+                ['Destination', intent.destination],
+                ['Check-in', intent.check_in],
+                ['Nights', intent.nights],
+                ['Pax', intent.pax_count],
+                ['Budget (₹)', intent.budget_inr ? intent.budget_inr.toLocaleString('en-IN') : null],
+                ['Needs', intent.needs?.length ? intent.needs.join(', ') : null],
+            ];
+            let html = '<div class="intent-grid">';
+            for (const [label, value] of fields) {
+                if (value) {
+                    html += `<div class="intent-field"><span class="intent-label">${label}:</span> ${escapeHtml(String(value))}</div>`;
+                }
+            }
+            if (intent.raw_notes) {
+                html += `<div class="intent-field intent-notes"><span class="intent-label">Notes:</span> ${escapeHtml(intent.raw_notes)}</div>`;
+            }
+            html += '</div>';
+            return html;
+        }
+
+        function formatDraft(text) {
+            if (!text) return '<em>Draft failed</em>';
+            return `<div class="draft-box">${escapeHtml(text).replace(/\n/g, '<br>')}</div>`;
+        }
+
+        async function processInquiry(inquiry) {
+            const timeline = document.getElementById('timeline');
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.classList.remove('hidden');
+            timeline.innerHTML = `
+                <div class="step step-active">
+                    <div class="step-num">⏳</div>
+                    <div class="step-title">Processing...</div>
+                    <div class="step-content">Running the agent pipeline — this may take 30-60 seconds.</div>
+                </div>
+            `;
+
+            try {
+                const res = await fetch('/process', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ inquiry })
+                });
+
+                const data = await res.json();
+
+                if (data.status === 'error') {
+                    timeline.innerHTML = `<div class="error">Error: ${escapeHtml(data.message)}</div>`;
+                    return;
+                }
+
+                const steps = data.steps;
+                let html = '';
+
+                // Step 1: Extract
+                html += renderStep(1, '🔍 Extract Intent', formatIntent(steps.extract));
+
+                // Step 2: Classify
+                html += renderStep(2, '🏷️ Classify Lead', `
+                    <div class="classify-result">
+                        Quality: ${renderBadge(steps.classify.quality)}
+                        <div class="quality-reason">${escapeHtml(steps.classify.reason)}</div>
+                    </div>
+                `);
+
+                // Step 3: Retrieve
+                html += renderStep(3, '📚 Retrieve Rates', renderRates(steps.retrieve));
+
+                // Step 4a: Supplier Request
+                html += renderStep(4, '✉️ Supplier Quote Request', formatDraft(steps.draft.supplier_request));
+
+                // Step 4b: Client Ack
+                html += renderStep(5, '💬 Client Acknowledgment', formatDraft(steps.draft.client_ack));
+
+                timeline.innerHTML = html;
+
+            } catch (err) {
+                timeline.innerHTML = `<div class="error">Network error: ${escapeHtml(err.message)}</div>`;
+            }
+        }
+
+        document.getElementById('inquiry-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const inquiry = document.getElementById('inquiry').value.trim();
+            if (!inquiry) return;
+            const btn = document.getElementById('submit-btn');
+            btn.disabled = true;
+            btn.textContent = '⏳ Processing...';
+            await processInquiry(inquiry);
+            btn.disabled = false;
+            btn.textContent = '⚡ Process Inquiry';
+        });
+    </script>
+</body>
+</html>
