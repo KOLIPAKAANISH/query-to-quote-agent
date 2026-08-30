@@ -6,3 +6,4 @@ chromadb
 pydantic
 python-dotenv
 sentence-transformers
+gunicorn
